@@ -282,9 +282,9 @@ fn layout_start_screen(t: &mut Text, lines: &[&[u8]], time: f64, sw: f32, sh: f3
     y += lh * 2.0;
     if (time * 2.0) as i64 % 2 == 0 {
         #[cfg(not(target_arch = "wasm32"))]
-        t.centered(sw, y, b"[ click or press any key to start ]", WHITE);
+        t.centered(sw, y, b"[ click or press enter to start ]", WHITE);
         #[cfg(target_arch = "wasm32")]
-        t.centered(sw, y, b"[ click or press any key to start  -  sound on ]", WHITE);
+        t.centered(sw, y, b"[ click or press enter to start  -  sound on ]", WHITE);
     }
     y += lh;
     y += lh;
@@ -505,9 +505,17 @@ impl EventHandler for Stage {
     }
 
     fn key_down_event(&mut self, key: KeyCode, mods: KeyMods, repeat: bool) {
-        #[cfg(target_arch = "wasm32")]
-        let _ = mods;
         if repeat {
+            return;
+        }
+        // (in the browser, web/index.html handles F / Alt+Enter: it must call requestFullscreen
+        // itself, inside the real key handler)
+        #[cfg(not(target_arch = "wasm32"))]
+        if (key == KeyCode::F && !mods.ctrl && !mods.logo) || (key == KeyCode::Enter && mods.alt) {
+            self.toggle_fullscreen();
+        }
+        // nothing else happens while Cmd / Ctrl / Alt is held (Cmd+Tab, shortcuts, ...)
+        if mods.ctrl || mods.alt || mods.logo {
             return;
         }
         // Esc: in the intro, back to the start screen; on the start screen, quit (natively; a
@@ -522,14 +530,11 @@ impl EventHandler for Stage {
             }
             return;
         }
-        // (in the browser, web/index.html handles F / Alt+Enter: it must call requestFullscreen
-        // itself, inside the real key handler)
-        #[cfg(not(target_arch = "wasm32"))]
-        if key == KeyCode::F || (key == KeyCode::Enter && mods.alt) {
-            self.toggle_fullscreen();
-        }
+        let enter_or_space = matches!(key, KeyCode::Enter | KeyCode::KpEnter | KeyCode::Space);
         if !self.started {
-            self.start(); // the key that starts the intro does nothing else
+            if enter_or_space {
+                self.start(); // the key that starts the intro does nothing else
+            }
         } else if key == KeyCode::Space {
             self.scroll_paused = !self.scroll_paused;
         }
@@ -672,7 +677,7 @@ mod web_audio {
     /// Lets miniquad's JS loader know the `enfusia_audio` plugin in audio.js is in use.
     #[no_mangle]
     pub extern "C" fn enfusia_audio_crate_version() -> u32 {
-        1
+        2 // must match `version` of the enfusia_audio plugin in web/audio.js
     }
 
     /// Create the player for the output sample rate. Returns 1 on success.

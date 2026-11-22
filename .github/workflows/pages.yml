@@ -1,4 +1,4 @@
-# Build the browser version (rust/build-web.sh) and publish rust/web to GitHub Pages.
+# Build the browser version (rust/build-web.sh) and publish rust/target/web to GitHub Pages.
 # One-time setup: Settings > Pages > Source: "GitHub Actions"
 # (or: gh api -X POST repos/OWNER/REPO/pages -f build_type=workflow).
 name: pages
@@ -26,15 +26,15 @@ jobs:
         run: |
           rustup toolchain install stable --profile minimal --target wasm32-unknown-unknown
           rustup default stable
-      - name: Build web/enfusia-tunnel.wasm
+      - name: Build rust/target/web
         run: sh rust/build-web.sh
       - name: Sizes
         run: |
-          ls -l rust/web
-          echo "wasm gzip -9: $(gzip -9c rust/web/enfusia-tunnel.wasm | wc -c) bytes"
+          ls -l rust/target/web
+          echo "wasm gzip -9: $(gzip -9c rust/target/web/enfusia-tunnel.wasm | wc -c) bytes"
       - uses: actions/upload-pages-artifact@v5
         with:
-          path: rust/web
+          path: rust/target/web
 
   deploy:
     needs: build

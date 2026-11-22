@@ -6,6 +6,7 @@ class EnfusiaS3M extends AudioWorkletProcessor {
     super();
     this.ex = null;
     this.playing = options.processorOptions.playing !== false;
+    this.rewound = true;  // the player is at the very beginning
     this.pos = 0;     // frames since the player was (re)created
     this.head = 0;    // sum of |samples| over the first second after (re)start, for tests
     this.frames = 0; this.sumsq = 0; this.peak = 0; this.nonzero = 0; this.sent = 0;
@@ -22,20 +23,23 @@ class EnfusiaS3M extends AudioWorkletProcessor {
         this.playing = false;
         this.rewind();
       } else if (e.data.type === "play") {
+        if (!this.rewound) this.rewind();
         this.playing = true;
+        this.port.postMessage({ type: "playing" }); // audio.js reconnects the node now
       }
     };
   }
 
   rewind() { // a fresh player: the tune starts again at order 0, row 0
     if (this.ex) this.ex.enf_audio_init(sampleRate);
-    this.pos = 0; this.head = 0;
+    this.pos = 0; this.head = 0; this.rewound = true;
   }
 
   process(_inputs, outputs) {
     const out = outputs[0];
     if (!this.ex || !this.playing || !out || !out[0]) return true; // outputs stay silent
     const n = out[0].length;
+    this.rewound = false;
     const p = this.ex.enf_audio_render(n);
     const pcm = new Float32Array(this.ex.memory.buffer, p, 2 * n);
     const l = out[0], r = out[1] || null;

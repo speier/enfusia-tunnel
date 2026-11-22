@@ -26,6 +26,7 @@
       <path d="M0 0h3v1H1v2H0zM5 0h3v3H7V1H5zM0 5h1v2h2v1H0zM7 5h1v3H5V7h2z"/>
     </svg>
   </button>
+  <!-- build-web.sh adds ?v=<build hash> to these, and audio.js passes it on to the wasm -->
   <script src="mq_js_bundle.js"></script>
   <script src="audio.js"></script>
   <script>
@@ -57,17 +58,30 @@
         glCanvas.focus();
       });
     }
+    // Every key goes through here first (capture phase, before miniquad's canvas handler).
+    let focusAt = -1e9;
+    window.addEventListener("focus", () => { focusAt = performance.now(); });
     window.addEventListener("keydown", (e) => {
+      // keep it from the intro, but leave the browser's own shortcuts (Cmd+R, ...) alone
+      const drop = () => { e.stopImmediatePropagation(); };
+      // Esc in fullscreen only leaves fullscreen; whether the key arrives while still in
+      // fullscreen or just after the fullscreenchange, the intro must not also see it
       if (e.key === "Escape" && (fsElement() || performance.now() - fsExitAt < 500)) {
-        e.stopImmediatePropagation(); // capture phase: miniquad's canvas handler never sees it
+        drop();
         e.preventDefault();
         if (fsElement()) toggleFullscreen();
+        return;
       }
+      if (e.repeat) return drop();
+      if (!e.ctrlKey && !e.metaKey && ((e.key === "f" || e.key === "F") || (e.key === "Enter" && e.altKey))) {
+        toggleFullscreen();
+      }
+      // a key that arrives right after the window got focus back (Cmd+Tab, Alt+Tab) or with a
+      // modifier held is not for the intro (main.rs also ignores Cmd / Ctrl / Alt)
+      if (performance.now() - focusAt < 300 || e.ctrlKey || e.metaKey || e.altKey) return drop();
     }, true);
-    window.addEventListener("keydown", (e) => {
-      if (e.repeat) return;
-      if (e.key === "f" || e.key === "F" || (e.key === "Enter" && e.altKey)) toggleFullscreen();
-    });
+    // miniquad has no key code for Cmd / Windows keys and would log every keyup of one
+    window.addEventListener("keyup", (e) => { if (e.key === "Meta" || e.key === "OS") e.stopImmediatePropagation(); }, true);
     glCanvas.addEventListener("dblclick", toggleFullscreen);
 
     // the corner button: shown on mouse move / touch, hidden again after 2 s idle

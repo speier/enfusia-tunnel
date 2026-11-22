@@ -3,28 +3,45 @@
 // that wasm and calls enf_audio_render() for every 128-frame block, so the music never
 // waits on the render loop. Without AudioWorklet it falls back to a ScriptProcessorNode
 // driven by the page's own instance.
+//
+// Start / stop (Esc) reuse one AudioContext and one node:
+//   stop:  disconnect the node (silent at once, whatever the audio thread is doing), tell
+//          the player to pause and rewind, suspend the context.
+//   start: resume the context, tell the player to play; reconnect only when it confirms,
+//          so no old samples can leak out.
 "use strict";
-const enfAudio = { bytes: null, ctx: null, node: null, mode: "", ready: false, playing: false, error: "", stats: null };
+const enfAudio = { bytes: null, ctx: null, node: null, mode: "", ready: false, playing: false,
+  connected: false, error: "", stats: null };
+// build-web.sh loads this file as audio.js?v=<build hash>; load the wasm and the worklet
+// with the same tag so a browser cache can never mix two builds.
+const ENF_V = (document.currentScript && new URL(document.currentScript.src).search) || "";
 
-// The worklet instance only needs the player; stub every import miniquad's code would use.
-function enfStubImports() {
-  return new Proxy({}, { get: () => new Proxy({}, { get: () => () => 0 }) });
+// e.g. no audio output device: the intro still runs, just silently
+function enfNoDevice(e) { enfAudio.error = String(e); }
+
+function enfConnect(on) {
+  const n = enfAudio.node;
+  if (!n || on === enfAudio.connected) return;
+  if (on) n.connect(enfAudio.ctx.destination); else n.disconnect();
+  enfAudio.connected = on;
 }
 
 async function enfStartWorklet(ctx) {
-  await ctx.audioWorklet.addModule("audio-worklet.js");
+  await ctx.audioWorklet.addModule("audio-worklet.js" + ENF_V);
   const node = new AudioWorkletNode(ctx, "enfusia-s3m", {
     numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2],
     processorOptions: { bytes: enfAudio.bytes, playing: enfAudio.playing },
   });
   node.port.onmessage = (e) => {
-    if (e.data.type === "ready") enfAudio.ready = true;
-    else if (e.data.type === "stats") enfAudio.stats = e.data;
-    else if (e.data.type === "error") enfAudio.error = e.data.message;
+    const t = e.data.type;
+    if (t === "ready") enfAudio.ready = true;
+    else if (t === "playing") enfConnect(enfAudio.playing); // the player has rewound and runs
+    else if (t === "stats") enfAudio.stats = e.data;
+    else if (t === "error") enfAudio.error = e.data.message;
   };
-  node.connect(ctx.destination);
   enfAudio.node = node;
   enfAudio.mode = "worklet";
+  enfConnect(enfAudio.playing);
 }
 
 function enfStartScriptProcessor(ctx) {
@@ -37,52 +54,55 @@ function enfStartScriptProcessor(ctx) {
     const pcm = new Float32Array(wasm_memory.buffer, p, 2 * n);
     for (let i = 0; i < n; i++) { l[i] = pcm[2 * i]; r[i] = pcm[2 * i + 1]; }
   };
-  sp.connect(ctx.destination);
   enfAudio.node = sp;
   enfAudio.mode = "scriptprocessor";
   enfAudio.ready = true;
+  enfConnect(enfAudio.playing);
 }
 
-// Called from Rust (Stage::start) inside the click / key handler that starts the intro.
-// The first call creates the AudioContext and the worklet; later calls reuse them.
+// Called from Rust (Stage::start) inside the click / key / tap handler that starts the intro.
+// The first call creates the AudioContext and the node; later calls reuse them.
 function enfAudioStart() {
   enfAudio.playing = true;
-  if (enfAudio.ctx) {
-    if (enfAudio.ctx.state === "suspended") enfAudio.ctx.resume();
+  const ctx = enfAudio.ctx;
+  if (ctx) {
+    ctx.resume().catch(enfNoDevice);
     if (enfAudio.mode === "worklet") enfAudio.node.port.postMessage({ type: "play" });
+    else enfConnect(true); // ScriptProcessor: rewound in enfAudioStop already
     return;
   }
   const AC = window.AudioContext || window.webkitAudioContext;
   if (!AC) { enfAudio.error = "no Web Audio"; return; }
-  const ctx = new AC({ latencyHint: "playback" });
-  enfAudio.ctx = ctx;
-  ctx.resume();
+  enfAudio.ctx = new AC({ latencyHint: "playback" });
+  enfAudio.ctx.resume().catch(enfNoDevice);
   const fallback = (e) => {
     if (e) console.warn("AudioWorklet unavailable, using ScriptProcessor:", e);
-    try { enfStartScriptProcessor(ctx); } catch (err) { enfAudio.error = String(err); }
+    try { enfStartScriptProcessor(enfAudio.ctx); } catch (err) { enfAudio.error = String(err); }
   };
-  if (ctx.audioWorklet && enfAudio.bytes) enfStartWorklet(ctx).catch(fallback);
+  if (enfAudio.ctx.audioWorklet && enfAudio.bytes) enfStartWorklet(enfAudio.ctx).catch(fallback);
   else fallback();
 }
 
-// Called from Rust (Stage::stop) when Esc leaves the intro: silence, and rewind the player
-// right away so the next start begins at the first row again.
+// Called from Rust (Stage::stop) when Esc leaves the intro.
 function enfAudioStop() {
   enfAudio.playing = false;
+  if (!enfAudio.ctx) return;
+  enfConnect(false);
   if (enfAudio.mode === "worklet") enfAudio.node.port.postMessage({ type: "stop" });
   else if (enfAudio.mode === "scriptprocessor") wasm_exports.enf_audio_init(enfAudio.ctx.sampleRate);
+  enfAudio.ctx.suspend().catch(enfNoDevice);
 }
 
 // Some browsers only count touchend / click as a gesture: resume there as well.
 for (const ev of ["click", "touchend", "keyup"]) {
   window.addEventListener(ev, () => {
-    if (enfAudio.ctx && enfAudio.ctx.state === "suspended") enfAudio.ctx.resume();
+    if (enfAudio.playing && enfAudio.ctx && enfAudio.ctx.state === "suspended") enfAudio.ctx.resume().catch(enfNoDevice);
   }, true);
 }
 
 miniquad_add_plugin({
   name: "enfusia_audio",
-  version: 1,
+  version: 2, // = enfusia_audio_crate_version() in main.rs; miniquad logs an error on mismatch
   register_plugin: (importObject) => {
     importObject.env.enf_audio_start = enfAudioStart;
     importObject.env.enf_audio_stop = enfAudioStop;
@@ -91,6 +111,7 @@ miniquad_add_plugin({
 
 // Fetch the wasm once: miniquad runs it from a blob URL, the worklet gets the same bytes.
 function enfLoad(url) {
+  url += ENF_V;
   fetch(url)
     .then((r) => { if (!r.ok) throw new Error(url + ": HTTP " + r.status); return r.arrayBuffer(); })
     .then((bytes) => {

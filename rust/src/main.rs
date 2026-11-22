@@ -1,7 +1,7 @@
 //! ENFUSiA tunnel intro
 //!
 //! Original: SPeY / ENFUSiA, April 2002 -- Delphi + OpenGL 1.1 + BASSMOD (`intro.pas`).
-//! This port: Rust on bare miniquad (OpenGL / WebGL) + cpal, built to be small.
+//! This port: Rust on bare miniquad (OpenGL / WebGL) + cpal (native) or Web Audio (wasm).
 //!
 //! Everything is embedded in the binary, just like the original single-file exe:
 //! the tunnel texture (`tunel.bmp`), the scroller text, a 4 KB CP437 font and the original
@@ -10,13 +10,11 @@
 
 use miniquad::*;
 
-#[cfg(not(target_arch = "wasm32"))]
 mod s3m;
 
 // --- embedded resources (the original linked these in via ENFUSiA.rc) ---
 const TUNEL_BMP: &[u8] = include_bytes!("../../assets/tunel.bmp");
 /// The original tune, played live (BASSMOD in 2002, s3m.rs now).
-#[cfg(not(target_arch = "wasm32"))]
 const MUSIC_S3M: &[u8] = include_bytes!("../../assets/music.s3m");
 /// Scroller text, CP437: the 2003 ENFUSiA NFO art by Yce*Remorse, with demo text inside.
 const NFO: &[u8] = include_bytes!("../../assets/scroller.nfo");
@@ -283,14 +281,17 @@ fn layout_start_screen(t: &mut Text, lines: &[&[u8]], time: f64, sw: f32, sh: f3
     t.centered(sw, y, MUSIC_CREDIT, GREY);
     y += lh * 2.0;
     if (time * 2.0) as i64 % 2 == 0 {
+        #[cfg(not(target_arch = "wasm32"))]
         t.centered(sw, y, b"[ click or press any key to start ]", WHITE);
+        #[cfg(target_arch = "wasm32")]
+        t.centered(sw, y, b"[ click or press any key to start  -  sound on ]", WHITE);
     }
     y += lh;
     y += lh;
     #[cfg(not(target_arch = "wasm32"))]
     t.centered(sw, y, b"Space: pause scroller   F: fullscreen   Esc: quit", DARK);
     #[cfg(target_arch = "wasm32")]
-    t.centered(sw, y, b"Space: pause scroller", DARK);
+    t.centered(sw, y, b"Space: pause scroller   F: fullscreen", DARK);
 }
 
 struct Stage {
@@ -308,6 +309,7 @@ struct Stage {
     scroll_ms: f64,
     scroll_paused: bool,
     last: f64,
+    #[cfg(not(target_arch = "wasm32"))]
     fullscreen: bool,
     /// --freeze MS: draw the intro at a fixed time (for screenshots)
     freeze: Option<f64>,
@@ -315,6 +317,8 @@ struct Stage {
 
 impl Stage {
     fn new(fullscreen: bool, freeze: Option<f64>) -> Self {
+        #[cfg(target_arch = "wasm32")]
+        let _ = fullscreen; // the page handles fullscreen in the browser
         let mut ctx = window::new_rendering_backend();
 
         let (tw, th, rgba) = load_bmp_rgba(TUNEL_BMP);
@@ -398,6 +402,7 @@ impl Stage {
             scroll_ms: 0.0,
             scroll_paused: false,
             last: now,
+            #[cfg(not(target_arch = "wasm32"))]
             fullscreen,
             freeze,
         };
@@ -420,10 +425,15 @@ impl Stage {
             Ok(s) => self.stream = Some(s),
             Err(e) => eprintln!("music disabled: {e}"),
         }
+        // the browser plays it from an AudioWorklet (see web/audio.js); this call runs inside
+        // the click / key handler, so the browser lets the AudioContext start
+        #[cfg(target_arch = "wasm32")]
+        web_audio::start();
         #[cfg(not(target_arch = "wasm32"))]
         window::show_mouse(false);
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
     fn toggle_fullscreen(&mut self) {
         self.fullscreen = !self.fullscreen;
         window::set_fullscreen(self.fullscreen);
@@ -476,6 +486,8 @@ impl EventHandler for Stage {
     }
 
     fn key_down_event(&mut self, key: KeyCode, mods: KeyMods, repeat: bool) {
+        #[cfg(target_arch = "wasm32")]
+        let _ = mods;
         #[cfg(not(target_arch = "wasm32"))]
         if key == KeyCode::Escape {
             window::order_quit();
@@ -484,6 +496,9 @@ impl EventHandler for Stage {
         if repeat {
             return;
         }
+        // (in the browser, web/index.html handles F / Alt+Enter: it must call requestFullscreen
+        // itself, inside the real key handler)
+        #[cfg(not(target_arch = "wasm32"))]
         if key == KeyCode::F || (key == KeyCode::Enter && mods.alt) {
             self.toggle_fullscreen();
         }
@@ -599,5 +614,54 @@ mod music {
                 None,
             )
             .map_err(|e| e.to_string())
+    }
+}
+
+/// Web Audio glue: web/audio.js calls these from an AudioWorklet that runs its own instance of
+/// this same wasm module, so the music never waits on the render loop.
+#[cfg(target_arch = "wasm32")]
+mod web_audio {
+    use crate::s3m::Player;
+    use std::cell::RefCell;
+
+    thread_local! {
+        static PLAYER: RefCell<Option<(Player, Vec<f32>)>> = const { RefCell::new(None) };
+    }
+
+    extern "C" {
+        fn enf_audio_start();
+    }
+
+    /// Ask the page to start the AudioContext (call from a user-gesture event).
+    pub fn start() {
+        unsafe { enf_audio_start() }
+    }
+
+    /// Lets miniquad's JS loader know the `enfusia_audio` plugin in audio.js is in use.
+    #[no_mangle]
+    pub extern "C" fn enfusia_audio_crate_version() -> u32 {
+        1
+    }
+
+    /// Create the player for the output sample rate. Returns 1 on success.
+    #[no_mangle]
+    pub extern "C" fn enf_audio_init(rate: u32) -> u32 {
+        let p = Player::new(crate::MUSIC_S3M, rate);
+        let ok = p.is_some() as u32;
+        PLAYER.with(|s| *s.borrow_mut() = p.map(|p| (p, Vec::new())));
+        ok
+    }
+
+    /// Render `frames` interleaved stereo f32 frames; returns a pointer into wasm memory.
+    #[no_mangle]
+    pub extern "C" fn enf_audio_render(frames: u32) -> *const f32 {
+        PLAYER.with(|s| match s.borrow_mut().as_mut() {
+            Some((p, buf)) => {
+                buf.resize(frames as usize * 2, 0.0);
+                p.render(buf);
+                buf.as_ptr()
+            }
+            None => std::ptr::null(),
+        })
     }
 }

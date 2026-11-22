@@ -1,5 +1,9 @@
 # ENFUSiA tunnel intro: ports
 
+**▶ [Run it in your browser](https://speier.github.io/enfusia-tunnel/)**: no download.
+Click to start, with sound on. The music is the same S3M replayer as the native build,
+compiled to WebAssembly.
+
 In April 2002 I (SPeY / ENFUSiA) wrote a small tunnel intro in Delphi: raw Win32,
 OpenGL 1.1 immediate mode and BASSMOD playing a Scream Tracker module.
 
@@ -37,7 +41,7 @@ embedded, portable approach the 2002 exe used. The operating system's own framew
 | Port | Language / stack | Binary size | vs 2002 exe | Status |
 |---|---|---|---|---|
 | [original/](original/intro.pas) | Delphi + Win32 + OpenGL 1.1 + BASSMOD (DLL embedded) | **71,249 B** | 1× | the reference |
-| [rust/](rust/) | Rust + miniquad + cpal + own S3M replayer | **651,784 B** stable, **375,360 B** nightly¹ | 9.1× / 5.3× | ✅ native (macOS, Linux, Windows); web is TODO |
+| [rust/](rust/) | Rust + miniquad + cpal + own S3M replayer | **651,784 B** stable, **375,360 B** nightly¹ | 9.1× / 5.3× | ✅ native (macOS, Linux, Windows), ✅ [web](https://speier.github.io/enfusia-tunnel/) (210,701 B wasm, 91,989 B gzipped) |
 | C | C | – | – | 🗓 planned |
 | Zig | Zig | – | – | 🗓 planned |
 | asm | assembly | – | – | 🗓 planned |
@@ -53,7 +57,8 @@ assets/     shared by every port: music.s3m, tunel.bmp, scroller.nfo (the 2003
             ENFUSiA NFO art by Yce\*Remorse with demo text inside),
             cp437_8x16.bin (font bitmap), ENFUSiA.ico
 original/   intro.pas, the 2002 Delphi source
-rust/       the Rust port (Cargo project; embeds ../assets with include_bytes!)
+rust/       the Rust port (Cargo project; embeds ../assets with include_bytes!);
+            rust/web is the browser page around the wasm build
 tools/      make_font.py + the Px437 TTF it bakes cp437_8x16.bin from
 ```
 
@@ -151,8 +156,41 @@ ports.
 
 ### Web
 
-`rust/build-web.sh` still compiles to WebAssembly and the tunnel renders, but there is
-no music yet. See [rust/web/TODO.md](rust/web/TODO.md).
+The same `main.rs` and `s3m.rs`, compiled to `wasm32-unknown-unknown`:
+
+```sh
+rust/build-web.sh                                  # -> rust/web/enfusia-tunnel.wasm
+python3 -m http.server 8080 --directory rust/web   # open http://localhost:8080/
+```
+
+* **One wasm, everything inside:** code, texture, font, NFO and `music.s3m`, embedded as in
+  the native binary. The page only serves a few files:
+
+  | file | size | gzip -9 |
+  |---|---|---|
+  | `enfusia-tunnel.wasm` | 210,701 B | 91,989 B |
+  | `mq_js_bundle.js` (miniquad 0.4.11's `gl.js`, minified) | 31,541 B | 8,579 B |
+  | `audio.js` + `audio-worklet.js` (the Web Audio glue) | 5,238 B | 2,391 B |
+  | `index.html` (+ `favicon.ico`) | 1,460 B (+ 766 B) | 782 B (+ 469 B) |
+
+* **Music:** the wasm exports `enf_audio_init(rate)` and `enf_audio_render(frames)`.
+  - When the start-screen click or key reaches `Stage::start`, Rust calls into
+    `audio.js`. Because that happens inside the browser's own user-gesture event, the
+    AudioContext is allowed to start.
+  - An AudioWorklet (`audio-worklet.js`) then runs its own instance of the same wasm,
+    with the miniquad imports stubbed out. It renders each 128-frame block on the audio
+    thread, so the music never waits on the render loop.
+  - The wasm is fetched only once.
+  - Browsers without AudioWorklet fall back to a ScriptProcessorNode on the page's own
+    instance.
+* **Same sound as native:** 30 s rendered through the real worklet in Chrome
+  (OfflineAudioContext, at 44.1 and 48 kHz) are bit-identical to the native
+  `--dump-pcm --block 128` render of the same player.
+* **Controls:** as in the native build. Fullscreen is F, Alt+Enter or a double-click,
+  handled in `index.html` because browsers only allow it from a key or click handler.
+  There is no Esc-to-quit in a browser.
+* **Deploy:** `.github/workflows/pages.yml` builds this on every push to `main` and
+  publishes `rust/web` to GitHub Pages. No build output is committed.
 
 ## Credits
 

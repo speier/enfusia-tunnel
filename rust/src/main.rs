@@ -283,12 +283,16 @@ fn layout_scroller(t: &mut Text, lines: &[&[u8]], scroll_ms: f64, sw: f32, sh: f
     }
 }
 
+/// Empty columns kept on each side of the start screen text.
+const TEXT_MARGIN: f32 = 2.0;
+
 /// The "click to start" screen (browsers need a user gesture before audio, too). On a narrow
 /// screen (a phone in portrait) the long lines are split so the text can stay large; on a
 /// touch screen the hints talk about tapping and the keyboard-only line is left out.
 fn layout_start_screen(t: &mut Text, lines: &[&[u8]], time: f64, sw: f32, sh: f32) {
     let touch = TOUCH.load(Ordering::Relaxed);
-    let compact = sw < 54.0 * GLYPH_W * (sh / REF_HEIGHT).max(1.0);
+    // wrap when the long line plus the margins would not fit at the normal size
+    let compact = sw < (53.0 + 2.0 * TEXT_MARGIN) * GLYPH_W * (sh / REF_HEIGHT).max(1.0);
     let mut text: Vec<(&[u8], [f32; 4])> = vec![(b"tunnel intro  -  2002 by SPeY / ENFUSiA", WHITE)];
     if compact {
         text.push((b"Delphi + OpenGL + BASSMOD", GREY));
@@ -321,7 +325,8 @@ fn layout_start_screen(t: &mut Text, lines: &[&[u8]], time: f64, sw: f32, sh: f3
     // logo: as wide as fits; text: fits on its own, at most 1.6x the logo's scale
     let logo = &lines[LOGO.start..LOGO.end.min(lines.len())];
     let logo_cols = logo.iter().map(|l| l.len()).max().unwrap_or(1);
-    let text_cols = text.iter().map(|(l, _)| l.len()).chain([prompt.len()]).max().unwrap_or(1);
+    let text_cols = text.iter().map(|(l, _)| l.len()).chain([prompt.len()]).max().unwrap_or(1)
+        + 2 * TEXT_MARGIN as usize; // keep a margin at the screen edges
     let rows = (logo.len() + 1 + text.len()) as f32;
     t.fit(sw, sh, logo_cols, rows);
     let (logo_s, logo_h) = (t.s, logo.len() as f32 * t.h);

@@ -1,0 +1,28 @@
+[package]
+name = "enfusia-tunnel"
+version = "1.0.0"
+edition = "2021"
+description = "ENFUSiA intro (SPeY, 2002) - a Delphi/OpenGL/BASSMOD tunnel intro ported to Rust, one self-contained native binary with its own S3M replayer"
+license = "MIT"
+authors = ["SPeY / ENFUSiA"]
+readme = "../README.md"
+publish = false
+
+[dependencies]
+miniquad = "0.4.11"
+
+# Native music: our own S3M replayer (src/s3m.rs) + cpal for the audio device.
+# The browser build (web/) is a TODO: it compiles and renders, but has no music yet.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+cpal = "0.18"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
+
+# Keep `cargo run` (debug) smooth: optimise dependencies even in dev builds.
+[profile.dev.package."*"]
+opt-level = 3

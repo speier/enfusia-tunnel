@@ -1,0 +1,9 @@
+/rust/target/
+**/*.rs.bk
+# build output copied by rust/build-web.sh
+/rust/web/*.wasm
+# screenshots are kept outside the repo
+/shots/
+*.png
+.DS_Store
+.!*

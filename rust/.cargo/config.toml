@@ -1,0 +1,4 @@
+# quad-snd's JS audio functions are provided by mq_js_bundle.js at runtime;
+# newer rust-lld refuses to link undeclared imports unless told otherwise.
+[target.wasm32-unknown-unknown]
+rustflags = ["-C", "link-arg=--allow-undefined"]

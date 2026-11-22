@@ -103,6 +103,11 @@ for (const ev of ["click", "touchend", "keyup"]) {
 miniquad_add_plugin({
   name: "enfusia_audio",
   version: 2, // = enfusia_audio_crate_version() in main.rs; miniquad logs an error on mismatch
+  // before the first frame: a phone / tablet gets "tap to start" and no keyboard hints
+  on_init: () => {
+    const touch = window.matchMedia && matchMedia("(pointer: coarse)").matches;
+    if (wasm_exports.enf_set_touch) wasm_exports.enf_set_touch(touch ? 1 : 0);
+  },
   register_plugin: (importObject) => {
     importObject.env.enf_audio_start = enfAudioStart;
     importObject.env.enf_audio_stop = enfAudioStop;

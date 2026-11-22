@@ -9,6 +9,7 @@
 //! replayer (`s3m.rs`), which follows libopenmpt sample for sample. No external libraries.
 
 use miniquad::*;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 mod s3m;
 
@@ -202,16 +203,33 @@ struct Text {
 
 impl Text {
     fn new(screen_w: f32, screen_h: f32) -> Self {
-        let by_height = screen_h / REF_HEIGHT;
-        // never shrink the pixel font below 1:1 unless an 80-column line would not fit
-        let fit_80_cols = screen_w / (80.0 * GLYPH_W);
-        let s = by_height.max(fit_80_cols.min(1.0)).max(0.5);
-        Self {
-            w: (GLYPH_W * s).round().max(4.0),
-            h: (GLYPH_H * s).round().max(8.0),
-            s,
-            quads: Vec::new(),
+        let mut t = Self { w: GLYPH_W, h: GLYPH_H, s: 1.0, quads: Vec::new() };
+        t.fit(screen_w, screen_h, 80, 0.0);
+        t
+    }
+
+    /// Size the glyphs like the 1024x768 original (by window height), but never so big that
+    /// `cols` columns overflow the width or `rows` rows the height (phones in portrait, odd
+    /// window shapes; `rows` 0 = no height limit). Below 1:1 only when that is needed to fit.
+    fn fit(&mut self, screen_w: f32, screen_h: f32, cols: usize, rows: f32) {
+        let cols = cols.max(1) as f32;
+        let fit_w = screen_w / (cols * GLYPH_W);
+        let fit_h = screen_h / (rows * GLYPH_H);
+        let s = (screen_h / REF_HEIGHT).max(fit_w.min(1.0)).min(fit_w).min(fit_h).max(0.25);
+        self.set_scale(s, screen_w / cols);
+    }
+
+    /// Whole-pixel 1:2 glyph cells for font scale `s`, at most `max_w` px wide.
+    fn set_scale(&mut self, s: f32, max_w: f32) {
+        let w = (GLYPH_W * s).round().max(2.0);
+        if w <= max_w {
+            self.w = w;
+            self.h = (GLYPH_H * s).round().max(4.0);
+        } else {
+            self.w = max_w.floor().max(2.0);
+            self.h = 2.0 * self.w;
         }
+        self.s = s;
     }
 
     fn width(&self, line: &[u8]) -> f32 {
@@ -251,6 +269,8 @@ fn nfo_lines() -> Vec<&'static [u8]> {
 /// The ShowScroller the original meant to write: the text glides upward, forever, as one
 /// block centred horizontally (lines keep their relative alignment so the art stays intact).
 fn layout_scroller(t: &mut Text, lines: &[&[u8]], scroll_ms: f64, sw: f32, sh: f32) {
+    // the whole 79-column frame always fits the width (phones in portrait get smaller text)
+    t.fit(sw, sh, lines.iter().map(|l| l.len()).max().unwrap_or(80), 0.0);
     let block_w = lines.iter().map(|l| t.width(l)).fold(0.0, f32::max);
     let x = ((sw - block_w) / 2.0).max(0.0);
     let cycle = sh + lines.len() as f32 * t.h;
@@ -264,35 +284,75 @@ fn layout_scroller(t: &mut Text, lines: &[&[u8]], scroll_ms: f64, sw: f32, sh: f
 }
 
 /// The "click to start" screen (browsers need a user gesture before audio, too).
+/// The "click to start" screen (browsers need a user gesture before audio, too). On a narrow
+/// screen (a phone in portrait) the long lines are split so the text can stay large; on a
+/// touch screen the hints talk about tapping and the keyboard-only line is left out.
 fn layout_start_screen(t: &mut Text, lines: &[&[u8]], time: f64, sw: f32, sh: f32) {
-    let lh = t.h;
+    let touch = TOUCH.load(Ordering::Relaxed);
+    let compact = sw < 54.0 * GLYPH_W * (sh / REF_HEIGHT).max(1.0);
+    let mut text: Vec<(&[u8], [f32; 4])> = vec![(b"tunnel intro  -  2002 by SPeY / ENFUSiA", WHITE)];
+    if compact {
+        text.push((b"Delphi + OpenGL + BASSMOD  >>", GREY));
+        text.push((b"ported to Rust in 2026", GREY));
+    } else {
+        text.push((b"Delphi + OpenGL + BASSMOD  >>  ported to Rust in 2026", GREY));
+    }
+    text.push((MUSIC_CREDIT, GREY));
+    text.push((b"", WHITE));
+    let prompt: &[u8] = match (touch, compact, cfg!(target_arch = "wasm32")) {
+        (true, _, true) => b"[ tap to start  -  sound on ]",
+        (true, _, false) => b"[ tap to start ]",
+        (false, false, true) => b"[ click or press enter to start  -  sound on ]",
+        (false, true, true) => b"[ click or enter to start  -  sound on ]",
+        (false, _, false) => b"[ click or press enter to start ]",
+    };
+    let blink_on = (time * 2.0) as i64 % 2 == 0;
+    text.push((if blink_on { prompt } else { b"" }, WHITE));
+    if !touch {
+        text.push((b"", WHITE));
+        let hint: &[u8] = match (compact, cfg!(target_arch = "wasm32")) {
+            (false, true) => b"Space: pause scroller   F: fullscreen   Esc: back",
+            (false, false) => b"Space: pause scroller   F: fullscreen   Esc: quit",
+            (true, true) => b"Space: pause  F: fullscreen  Esc: back",
+            (true, false) => b"Space: pause  F: fullscreen  Esc: quit",
+        };
+        text.push((hint, DARK));
+    }
+
+    // logo: as wide as fits; text: fits on its own, at most 1.6x the logo's scale
     let logo = &lines[LOGO.start..LOGO.end.min(lines.len())];
-    let mut y = ((sh - (logo.len() as f32 + 10.0) * lh) / 2.0).max(0.0);
-    let logo_x = (sw - logo.iter().map(|l| t.width(l)).fold(0.0, f32::max)) / 2.0;
+    let logo_cols = logo.iter().map(|l| l.len()).max().unwrap_or(1);
+    let text_cols = text.iter().map(|(l, _)| l.len()).chain([prompt.len()]).max().unwrap_or(1);
+    let rows = (logo.len() + 1 + text.len()) as f32;
+    t.fit(sw, sh, logo_cols, rows);
+    let (logo_s, logo_h) = (t.s, logo.len() as f32 * t.h);
+    let logo_x = (sw - logo_cols as f32 * t.w) / 2.0;
+    let mut text_t = Text { w: t.w, h: t.h, s: t.s, quads: Vec::new() };
+    // same height rule as the logo, but the text rows must fit below it
+    let text_rows = (text.len() + 1) as f32 * sh / (sh - logo_h).max(1.0);
+    text_t.fit(sw, sh, text_cols, text_rows);
+    if text_t.s > logo_s * 1.6 {
+        text_t.set_scale(logo_s * 1.6, sw / text_cols as f32);
+    }
+    let total = logo_h + (1 + text.len()) as f32 * text_t.h;
+    let mut y = ((sh - total) / 2.0).max(0.0);
     for line in logo {
         t.line(logo_x, y, line, LOGO_BLUE);
-        y += lh;
+        y += t.h;
     }
-    y += lh;
-    t.centered(sw, y, b"tunnel intro  -  2002 by SPeY / ENFUSiA", WHITE);
-    y += lh;
-    t.centered(sw, y, b"Delphi + OpenGL + BASSMOD  >>  ported to Rust in 2026", GREY);
-    y += lh;
-    t.centered(sw, y, MUSIC_CREDIT, GREY);
-    y += lh * 2.0;
-    if (time * 2.0) as i64 % 2 == 0 {
-        #[cfg(not(target_arch = "wasm32"))]
-        t.centered(sw, y, b"[ click or press enter to start ]", WHITE);
-        #[cfg(target_arch = "wasm32")]
-        t.centered(sw, y, b"[ click or press enter to start  -  sound on ]", WHITE);
+    y += text_t.h;
+    let (w, h) = (t.w, t.h);
+    t.w = text_t.w;
+    t.h = text_t.h;
+    for (line, color) in text {
+        t.centered(sw, y, line, color);
+        y += t.h;
     }
-    y += lh;
-    y += lh;
-    #[cfg(not(target_arch = "wasm32"))]
-    t.centered(sw, y, b"Space: pause scroller   F: fullscreen   Esc: quit", DARK);
-    #[cfg(target_arch = "wasm32")]
-    t.centered(sw, y, b"Space: pause scroller   F: fullscreen   Esc: back", DARK);
+    (t.w, t.h) = (w, h);
 }
+
+/// A touch screen has been seen (web: reported by the page, see audio.js).
+static TOUCH: AtomicBool = AtomicBool::new(false);
 
 struct Stage {
     ctx: Box<dyn RenderingBackend>,
@@ -483,7 +543,10 @@ impl EventHandler for Stage {
             self.ctx.apply_pipeline(&self.tunnel_pipe);
             self.ctx.apply_bindings(&self.tunnel_bind);
             // gluPerspective(45.0, Width / Height, 1.0, 100.0)
-            self.ctx.apply_uniforms(UniformsSource::table(&perspective(45.0, sw / sh.max(1.0), 1.0, 100.0)));
+            let aspect = sw / sh.max(1.0);
+            // in portrait (phones) widen the vertical angle so the tube still fills the width
+            let fovy = if aspect < 1.0 { 2.0 * ((22.5f32).to_radians().tan() / aspect).atan().to_degrees() } else { 45.0 };
+            self.ctx.apply_uniforms(UniformsSource::table(&perspective(fovy, aspect, 1.0, 100.0)));
             self.ctx.draw(0, (DEPTH * SIDES * 6) as i32, 1);
         }
 
@@ -545,6 +608,7 @@ impl EventHandler for Stage {
     }
 
     fn touch_event(&mut self, phase: TouchPhase, _id: u64, _x: f32, _y: f32) {
+        TOUCH.store(true, Ordering::Relaxed);
         if phase == TouchPhase::Started {
             self.start();
         }
@@ -678,6 +742,12 @@ mod web_audio {
     #[no_mangle]
     pub extern "C" fn enfusia_audio_crate_version() -> u32 {
         2 // must match `version` of the enfusia_audio plugin in web/audio.js
+    }
+
+    /// The page reports a touch screen (coarse pointer) before the first frame.
+    #[no_mangle]
+    pub extern "C" fn enf_set_touch(on: u32) {
+        super::TOUCH.store(on != 0, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Create the player for the output sample rate. Returns 1 on success.

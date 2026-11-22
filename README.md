@@ -41,7 +41,7 @@ embedded, portable approach the 2002 exe used. The operating system's own framew
 | Port | Language / stack | Binary size | vs 2002 exe | Status |
 |---|---|---|---|---|
 | [original/](original/intro.pas) | Delphi + Win32 + OpenGL 1.1 + BASSMOD (DLL embedded) | **71,249 B** | 1× | the reference |
-| [rust/](rust/) | Rust + miniquad + cpal + own S3M replayer | **652,040 B** stable, **375,584 B** nightly¹ | 9.2× / 5.3× | ✅ native (macOS, Linux, Windows), ✅ [web](https://speier.github.io/enfusia-tunnel/) (210,848 B wasm, 92,055 B gzipped) |
+| [rust/](rust/) | Rust + miniquad + cpal + own S3M replayer | **654,000 B** stable, **377,544 B** nightly¹ | 9.2× / 5.3× | ✅ native (macOS, Linux, Windows), ✅ [web](https://speier.github.io/enfusia-tunnel/) (214,221 B wasm, 93,507 B gzipped) |
 | C | C | – | – | 🗓 planned |
 | Zig | Zig | – | – | 🗓 planned |
 | asm | assembly | – | – | 🗓 planned |
@@ -135,8 +135,8 @@ of assets).
 | A: macroquad + cpal, libopenmpt via dlopen | 1,126,144 B | ~1,087 KB | no, needs libopenmpt |
 | B: bare miniquad + cpal, libopenmpt via dlopen | 633,056 B | ~594 KB | no, needs libopenmpt |
 | B + libopenmpt (and libstdc++) linked statically | ≈ 2,358 KB | ~2,319 KB | yes, but 3.7× bigger |
-| **C: bare miniquad + cpal + own replayer (default)** | **652,040 B** | ~606 KB | **yes** |
-| **C, nightly `build-tiny.sh`** (std rebuilt, `panic=immediate-abort`) | **375,584 B** | ~330 KB | **yes** |
+| **C: bare miniquad + cpal + own replayer (default)** | **654,000 B** | ~606 KB | **yes** |
+| **C, nightly `build-tiny.sh`** (std rebuilt, `panic=immediate-abort`) | **377,544 B** | ~330 KB | **yes** |
 
 Where C's code goes (cargo-bloat, approximate):
 
@@ -168,10 +168,10 @@ python3 -m http.server 8080 --directory rust/target/web   # open http://localhos
 
   | file | size | gzip -9 |
   |---|---|---|
-  | `enfusia-tunnel.wasm` | 210,848 B | 92,055 B |
+  | `enfusia-tunnel.wasm` | 214,221 B | 93,507 B |
   | `mq_js_bundle.js` (miniquad 0.4.11's `gl.js`, minified) | 31,541 B | 8,579 B |
-  | `audio.js` + `audio-worklet.js` (the Web Audio glue) | 8,204 B | 3,014 B |
-  | `index.html` (+ `favicon.ico`) | 5,596 B (+ 766 B) | 2,343 B (+ 469 B) |
+  | `audio.js` + `audio-worklet.js` (the Web Audio glue) | 8,475 B | 3,124 B |
+  | `index.html` (+ `favicon.ico`) | 5,954 B (+ 766 B) | 2,468 B (+ 469 B) |
 
 * **Music:** the wasm exports `enf_audio_init(rate)` and `enf_audio_render(frames)`.
   - When the start-screen click or key reaches `Stage::start`, Rust calls into
@@ -188,6 +188,18 @@ python3 -m http.server 8080 --directory rust/target/web   # open http://localhos
   `--dump-pcm --block 128` render of the same player.
 * **Controls:** as in the native build, plus touch.
   - A tap starts the intro and the music on phones and tablets.
+* **Phones and tablets:** the layout follows the screen, in portrait too, and changes on
+  rotation.
+  - Text is sized by the window height, like the 1024x768 original, but never wider than
+    the screen. The scroller fits the whole 79-column NFO across the width.
+  - On a narrow screen the start screen splits its long lines. On a touch screen it says
+    "tap to start" and leaves out the keyboard hints.
+  - In portrait the tunnel keeps a 45° horizontal field of view, so it still fills the
+    width.
+  - The canvas renders at the device pixel ratio and fills the visible viewport
+    (`position: fixed`, not `100vh`). The fullscreen button stays clear of notches
+    (`viewport-fit=cover` + `env(safe-area-inset-*)`).
+  - The native build uses the same layout code, so tall or narrow windows fit there too.
   - Fullscreen toggles with F, Alt+Enter, a double-click, or the small corner-bracket button in the
     top-right corner. The button appears when the mouse moves or the screen is touched,
     and hides after 2 s idle, so it also works without a keyboard. It is hidden where

@@ -283,7 +283,6 @@ fn layout_scroller(t: &mut Text, lines: &[&[u8]], scroll_ms: f64, sw: f32, sh: f
     }
 }
 
-/// The "click to start" screen (browsers need a user gesture before audio, too).
 /// The "click to start" screen (browsers need a user gesture before audio, too). On a narrow
 /// screen (a phone in portrait) the long lines are split so the text can stay large; on a
 /// touch screen the hints talk about tapping and the keyboard-only line is left out.
@@ -292,8 +291,8 @@ fn layout_start_screen(t: &mut Text, lines: &[&[u8]], time: f64, sw: f32, sh: f3
     let compact = sw < 54.0 * GLYPH_W * (sh / REF_HEIGHT).max(1.0);
     let mut text: Vec<(&[u8], [f32; 4])> = vec![(b"tunnel intro  -  2002 by SPeY / ENFUSiA", WHITE)];
     if compact {
-        text.push((b"Delphi + OpenGL + BASSMOD  >>", GREY));
-        text.push((b"ported to Rust in 2026", GREY));
+        text.push((b"Delphi + OpenGL + BASSMOD", GREY));
+        text.push((b">>  ported to Rust in 2026", GREY));
     } else {
         text.push((b"Delphi + OpenGL + BASSMOD  >>  ported to Rust in 2026", GREY));
     }

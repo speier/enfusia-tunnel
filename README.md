@@ -41,7 +41,7 @@ embedded, portable approach the 2002 exe used. The operating system's own framew
 | Port | Language / stack | Binary size | vs 2002 exe | Status |
 |---|---|---|---|---|
 | [original/](original/intro.pas) | Delphi + Win32 + OpenGL 1.1 + BASSMOD (DLL embedded) | **71,249 B** | 1× | the reference |
-| [rust/](rust/) | Rust + miniquad + cpal + own S3M replayer | **651,784 B** stable, **375,360 B** nightly¹ | 9.1× / 5.3× | ✅ native (macOS, Linux, Windows), ✅ [web](https://speier.github.io/enfusia-tunnel/) (210,701 B wasm, 91,989 B gzipped) |
+| [rust/](rust/) | Rust + miniquad + cpal + own S3M replayer | **651,960 B** stable, **375,504 B** nightly¹ | 9.2× / 5.3× | ✅ native (macOS, Linux, Windows), ✅ [web](https://speier.github.io/enfusia-tunnel/) (210,791 B wasm, 92,031 B gzipped) |
 | C | C | – | – | 🗓 planned |
 | Zig | Zig | – | – | 🗓 planned |
 | asm | assembly | – | – | 🗓 planned |
@@ -81,10 +81,10 @@ rust-src, and gives the same output; a panic just aborts without printing a mess
 
 | Key | Action |
 |---|---|
-| click / any key | start the intro (the start screen is there because audio needs a user gesture) |
+| click / tap / any key | start the intro (the start screen is there because audio needs a user gesture) |
 | Space | pause or resume the scroller only (it has its own clock; tunnel and music keep going) |
-| F or Alt+Enter | toggle fullscreen |
-| Esc | quit |
+| F or Alt+Enter | toggle fullscreen (in the browser also a double-click or the corner button) |
+| Esc | in the intro: back to the start screen (music, tunnel and scroller restart from the beginning next time); on the start screen: quit (native only) |
 
 Developer options:
 - `--size WxH`, `--fullscreen`
@@ -135,8 +135,8 @@ of assets).
 | A: macroquad + cpal, libopenmpt via dlopen | 1,126,144 B | ~1,087 KB | no, needs libopenmpt |
 | B: bare miniquad + cpal, libopenmpt via dlopen | 633,056 B | ~594 KB | no, needs libopenmpt |
 | B + libopenmpt (and libstdc++) linked statically | ≈ 2,358 KB | ~2,319 KB | yes, but 3.7× bigger |
-| **C: bare miniquad + cpal + own replayer (default)** | **651,784 B** | ~606 KB | **yes** |
-| **C, nightly `build-tiny.sh`** (std rebuilt, `panic=immediate-abort`) | **375,360 B** | ~330 KB | **yes** |
+| **C: bare miniquad + cpal + own replayer (default)** | **651,960 B** | ~606 KB | **yes** |
+| **C, nightly `build-tiny.sh`** (std rebuilt, `panic=immediate-abort`) | **375,504 B** | ~330 KB | **yes** |
 
 Where C's code goes (cargo-bloat, approximate):
 
@@ -168,10 +168,10 @@ python3 -m http.server 8080 --directory rust/web   # open http://localhost:8080/
 
   | file | size | gzip -9 |
   |---|---|---|
-  | `enfusia-tunnel.wasm` | 210,701 B | 91,989 B |
+  | `enfusia-tunnel.wasm` | 210,791 B | 92,031 B |
   | `mq_js_bundle.js` (miniquad 0.4.11's `gl.js`, minified) | 31,541 B | 8,579 B |
-  | `audio.js` + `audio-worklet.js` (the Web Audio glue) | 5,238 B | 2,391 B |
-  | `index.html` (+ `favicon.ico`) | 1,460 B (+ 766 B) | 782 B (+ 469 B) |
+  | `audio.js` + `audio-worklet.js` (the Web Audio glue) | 6,875 B | 2,524 B |
+  | `index.html` (+ `favicon.ico`) | 4,524 B (+ 766 B) | 1,959 B (+ 469 B) |
 
 * **Music:** the wasm exports `enf_audio_init(rate)` and `enf_audio_render(frames)`.
   - When the start-screen click or key reaches `Stage::start`, Rust calls into
@@ -186,9 +186,19 @@ python3 -m http.server 8080 --directory rust/web   # open http://localhost:8080/
 * **Same sound as native:** 30 s rendered through the real worklet in Chrome
   (OfflineAudioContext, at 44.1 and 48 kHz) are bit-identical to the native
   `--dump-pcm --block 128` render of the same player.
-* **Controls:** as in the native build. Fullscreen is F, Alt+Enter or a double-click,
-  handled in `index.html` because browsers only allow it from a key or click handler.
-  There is no Esc-to-quit in a browser.
+* **Controls:** as in the native build, plus touch.
+  - A tap starts the intro and the music on phones and tablets.
+  - Fullscreen toggles with F, Alt+Enter, a double-click, or the small corner-bracket button in the
+    top-right corner. The button appears when the mouse moves or the screen is touched,
+    and hides after 2 s idle, so it also works without a keyboard. It is hidden where
+    the page cannot go fullscreen, such as iPhone Safari.
+  - All of this is handled in `index.html`, because browsers only allow fullscreen from
+    a key, click or tap handler.
+  - Esc in the intro goes back to the start screen. The AudioContext and worklet are
+    kept and the player is rewound, so starting again plays the tune from the top.
+  - Esc on the start screen does nothing, because a page cannot close its tab.
+  - In browser fullscreen, Esc only leaves fullscreen; the same keypress never also
+    reaches the intro. A second Esc goes back to the start screen.
 * **Deploy:** `.github/workflows/pages.yml` builds this on every push to `main` and
   publishes `rust/web` to GitHub Pages. No build output is committed.
 

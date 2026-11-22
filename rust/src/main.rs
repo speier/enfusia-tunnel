@@ -291,7 +291,7 @@ fn layout_start_screen(t: &mut Text, lines: &[&[u8]], time: f64, sw: f32, sh: f3
     #[cfg(not(target_arch = "wasm32"))]
     t.centered(sw, y, b"Space: pause scroller   F: fullscreen   Esc: quit", DARK);
     #[cfg(target_arch = "wasm32")]
-    t.centered(sw, y, b"Space: pause scroller   F: fullscreen", DARK);
+    t.centered(sw, y, b"Space: pause scroller   F: fullscreen   Esc: back", DARK);
 }
 
 struct Stage {
@@ -433,6 +433,25 @@ impl Stage {
         window::show_mouse(false);
     }
 
+    /// Esc during the intro: back to the start screen. Music, tunnel clock and scroller all
+    /// start from the beginning next time.
+    fn stop(&mut self) {
+        if !self.started {
+            return;
+        }
+        self.started = false;
+        self.freeze = None;
+        self.scroll_ms = 0.0;
+        self.scroll_paused = false;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.stream = None; // dropping the stream stops it; start() makes a new player
+            window::show_mouse(true);
+        }
+        #[cfg(target_arch = "wasm32")]
+        web_audio::stop();
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     fn toggle_fullscreen(&mut self) {
         self.fullscreen = !self.fullscreen;
@@ -488,12 +507,19 @@ impl EventHandler for Stage {
     fn key_down_event(&mut self, key: KeyCode, mods: KeyMods, repeat: bool) {
         #[cfg(target_arch = "wasm32")]
         let _ = mods;
-        #[cfg(not(target_arch = "wasm32"))]
-        if key == KeyCode::Escape {
-            window::order_quit();
+        if repeat {
             return;
         }
-        if repeat {
+        // Esc: in the intro, back to the start screen; on the start screen, quit (natively; a
+        // web page cannot close its tab, and Esc in browser fullscreen only leaves fullscreen,
+        // see web/index.html)
+        if key == KeyCode::Escape {
+            if self.started {
+                self.stop();
+            } else {
+                #[cfg(not(target_arch = "wasm32"))]
+                window::order_quit();
+            }
             return;
         }
         // (in the browser, web/index.html handles F / Alt+Enter: it must call requestFullscreen
@@ -630,11 +656,17 @@ mod web_audio {
 
     extern "C" {
         fn enf_audio_start();
+        fn enf_audio_stop();
     }
 
-    /// Ask the page to start the AudioContext (call from a user-gesture event).
+    /// Ask the page to start (or restart) the music; call from a user-gesture event.
     pub fn start() {
         unsafe { enf_audio_start() }
+    }
+
+    /// Silence the music and rewind it to the beginning.
+    pub fn stop() {
+        unsafe { enf_audio_stop() }
     }
 
     /// Lets miniquad's JS loader know the `enfusia_audio` plugin in audio.js is in use.

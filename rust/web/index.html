@@ -7,27 +7,84 @@
   <link rel="icon" href="favicon.ico">
   <style>
     html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
-    canvas { display: block; width: 100vw; height: 100vh; outline: none; background: #000; }
+    canvas { display: block; width: 100vw; height: 100vh; outline: none; background: #000;
+             touch-action: none; }
+    #fs { position: fixed; z-index: 10; top: 12px; right: 12px; width: 44px; height: 44px; padding: 10px;
+          box-sizing: border-box; border: 2px solid rgba(255,255,255,.55); background: rgba(0,0,0,.35);
+          color: rgba(255,255,255,.85); cursor: pointer; opacity: 0; visibility: hidden;
+          transition: opacity .3s, visibility .3s; }
+    #fs.show { opacity: 1; visibility: visible; }
+    #fs:hover { color: #fff; border-color: #fff; }
+    #fs svg { display: block; width: 100%; height: 100%; shape-rendering: crispEdges; }
   </style>
 </head>
 <body>
   <canvas id="glcanvas" tabindex="1"></canvas>
+  <button id="fs" type="button" tabindex="-1" title="Fullscreen (F)" aria-label="Fullscreen">
+    <!-- four blocky corners, like CP437 box drawing -->
+    <svg viewBox="0 0 8 8" fill="currentColor" aria-hidden="true">
+      <path d="M0 0h3v1H1v2H0zM5 0h3v3H7V1H5zM0 5h1v2h2v1H0zM7 5h1v3H5V7h2z"/>
+    </svg>
+  </button>
   <script src="mq_js_bundle.js"></script>
   <script src="audio.js"></script>
   <script>
     // note: mq_js_bundle.js already defines a global `canvas`, so use another name here
     const glCanvas = document.getElementById("glcanvas");
+    const fsButton = document.getElementById("fs");
     glCanvas.focus();
-    // Fullscreen must be requested inside a real user-gesture handler, so it lives here.
+
+    // --- fullscreen: F, Alt+Enter, double-click or the corner button --------------------
+    // It must be requested inside a real user-gesture handler, so it lives here, not in Rust.
+    const fsElement = () => document.fullscreenElement || document.webkitFullscreenElement;
+    // the whole page goes fullscreen (not just the canvas), so the corner button stays usable
+    const fsRoot = document.documentElement;
+    const fsRequest = fsRoot.requestFullscreen || fsRoot.webkitRequestFullscreen;
+    const fsExit = document.exitFullscreen || document.webkitExitFullscreen;
     function toggleFullscreen() {
-      if (document.fullscreenElement) document.exitFullscreen();
-      else if (glCanvas.requestFullscreen) glCanvas.requestFullscreen().catch(() => {});
+      try {
+        const p = fsElement() ? fsExit.call(document) : fsRequest.call(fsRoot);
+        if (p && p.catch) p.catch(() => {});
+      } catch (e) { /* not allowed here: ignore */ }
     }
+    // Esc in browser fullscreen only leaves fullscreen (the browser does that itself). The
+    // intro must not also see that Esc and jump back to the start screen, whether the key
+    // event arrives while still in fullscreen or just after the fullscreenchange.
+    let fsExitAt = -1e9;
+    for (const ev of ["fullscreenchange", "webkitfullscreenchange"]) {
+      document.addEventListener(ev, () => {
+        if (!fsElement()) fsExitAt = performance.now();
+        glCanvas.focus();
+      });
+    }
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Escape" && (fsElement() || performance.now() - fsExitAt < 500)) {
+        e.stopImmediatePropagation(); // capture phase: miniquad's canvas handler never sees it
+        e.preventDefault();
+        if (fsElement()) toggleFullscreen();
+      }
+    }, true);
     window.addEventListener("keydown", (e) => {
       if (e.repeat) return;
       if (e.key === "f" || e.key === "F" || (e.key === "Enter" && e.altKey)) toggleFullscreen();
     });
     glCanvas.addEventListener("dblclick", toggleFullscreen);
+
+    // the corner button: shown on mouse move / touch, hidden again after 2 s idle
+    if (fsRequest) {
+      let hideTimer = 0;
+      const showButton = () => {
+        fsButton.classList.add("show");
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => fsButton.classList.remove("show"), 2000);
+      };
+      for (const ev of ["mousemove", "touchstart"]) window.addEventListener(ev, showButton, { passive: true });
+      fsButton.addEventListener("mousedown", (e) => e.preventDefault()); // keep keyboard focus on the canvas
+      fsButton.addEventListener("click", (e) => { e.stopPropagation(); toggleFullscreen(); showButton(); glCanvas.focus(); });
+    } else {
+      fsButton.remove(); // e.g. iPhone Safari: no element fullscreen
+    }
+
     // one self-contained wasm: code, texture, font, NFO and music.s3m (see audio.js)
     enfLoad("enfusia-tunnel.wasm");
   </script>

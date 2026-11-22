@@ -5,6 +5,9 @@ class EnfusiaS3M extends AudioWorkletProcessor {
   constructor(options) {
     super();
     this.ex = null;
+    this.playing = options.processorOptions.playing !== false;
+    this.pos = 0;     // frames since the player was (re)created
+    this.head = 0;    // sum of |samples| over the first second after (re)start, for tests
     this.frames = 0; this.sumsq = 0; this.peak = 0; this.nonzero = 0; this.sent = 0;
     const stub = new Proxy({}, { get: () => new Proxy({}, { get: () => () => 0 }) });
     WebAssembly.instantiate(options.processorOptions.bytes, stub)
@@ -14,11 +17,24 @@ class EnfusiaS3M extends AudioWorkletProcessor {
         this.port.postMessage({ type: "ready", sampleRate });
       })
       .catch((e) => this.port.postMessage({ type: "error", message: String(e) }));
+    this.port.onmessage = (e) => {
+      if (e.data.type === "stop") {
+        this.playing = false;
+        this.rewind();
+      } else if (e.data.type === "play") {
+        this.playing = true;
+      }
+    };
+  }
+
+  rewind() { // a fresh player: the tune starts again at order 0, row 0
+    if (this.ex) this.ex.enf_audio_init(sampleRate);
+    this.pos = 0; this.head = 0;
   }
 
   process(_inputs, outputs) {
     const out = outputs[0];
-    if (!this.ex || !out || !out[0]) return true;
+    if (!this.ex || !this.playing || !out || !out[0]) return true; // outputs stay silent
     const n = out[0].length;
     const p = this.ex.enf_audio_render(n);
     const pcm = new Float32Array(this.ex.memory.buffer, p, 2 * n);
@@ -30,12 +46,15 @@ class EnfusiaS3M extends AudioWorkletProcessor {
       const m = Math.max(Math.abs(a), Math.abs(b));
       if (m > this.peak) this.peak = m;
       if (m !== 0) this.nonzero++;
+      if (this.pos + i < sampleRate) this.head += Math.abs(a) + Math.abs(b);
     }
+    this.pos += n;
     this.frames += n;
     if (this.frames - this.sent >= sampleRate / 2) { // a small status report twice a second
       this.sent = this.frames;
       this.port.postMessage({ type: "stats", frames: this.frames, nonzero: this.nonzero,
-        rms: Math.sqrt(this.sumsq / (2 * this.frames)), peak: this.peak });
+        rms: Math.sqrt(this.sumsq / (2 * this.frames)), peak: this.peak,
+        pos: this.pos, head: this.pos >= sampleRate ? this.head : null });
     }
     return true;
   }
